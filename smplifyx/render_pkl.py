@@ -24,7 +24,7 @@ import torch
 import smplx
 
 from cmd_parser import parse_config
-from human_body_prior.tools.model_loader import load_vposer
+from human_body_prior_cvpr19.human_body_prior.tools.model_loader import load_vposer
 
 from utils import JointMapper
 import pyrender

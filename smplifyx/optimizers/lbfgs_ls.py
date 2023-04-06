@@ -35,7 +35,8 @@ def _cubic_interpolate(x1, f1, g1, x2, f2, g2, bounds=None):
     else:
         return (xmin_bound + xmax_bound) / 2.
 
-
+# x: beta, theta, root 参数，t: 初始化的step size, d: direction(1*45), f:totalloss, g: flat_grad (1*45),
+# gtd: direction derivate (1*1), max_iter = 30
 def _strong_Wolfe(obj_func, x, t, d, f, g, gtd, c1=1e-4, c2=0.9, tolerance_change=1e-9,
                   max_iter=20,
                   max_ls=25):
@@ -43,7 +44,7 @@ def _strong_Wolfe(obj_func, x, t, d, f, g, gtd, c1=1e-4, c2=0.9, tolerance_chang
     d_norm = d.abs().max()
     g = g.clone()
     # evaluate objective and gradient using initial step
-    f_new, g_new = obj_func(x, t, d)
+    f_new, g_new = obj_func(x, t, d)  # f_new: loss，g_new:梯度
     ls_func_evals = 1
     gtd_new = g_new.dot(d)
 
@@ -203,7 +204,7 @@ class LBFGS(Optimizer):
             max_eval = max_iter * 5 // 4
         defaults = dict(lr=lr, max_iter=max_iter, max_eval=max_eval,
                         tolerance_grad=tolerance_grad, tolerance_change=tolerance_change,
-                        history_size=history_size, line_search_fn=line_search_fn)
+                        history_size=history_size, line_search_fn=line_search_fn) # max_it= 30, max_eval= 37
         super(LBFGS, self).__init__(params, defaults)
 
         if len(self.param_groups) != 1:
@@ -262,13 +263,13 @@ class LBFGS(Optimizer):
         assert len(self.param_groups) == 1
 
         group = self.param_groups[0]
-        lr = group['lr']
-        max_iter = group['max_iter']
-        max_eval = group['max_eval']
-        tolerance_grad = group['tolerance_grad']
-        tolerance_change = group['tolerance_change']
-        line_search_fn = group['line_search_fn']
-        history_size = group['history_size']
+        lr = group['lr'] # 1.0
+        max_iter = group['max_iter'] #30
+        max_eval = group['max_eval'] # 37
+        tolerance_grad = group['tolerance_grad'] #1e-05
+        tolerance_change = group['tolerance_change'] # 1e-09
+        line_search_fn = group['line_search_fn'] #strong_Wolfe
+        history_size = group['history_size'] # 100
 
         # NOTE: LBFGS has only global state, but we register it as state for
         # the first param, because this helps with casting in load_state_dict
@@ -283,6 +284,7 @@ class LBFGS(Optimizer):
         state['func_evals'] += 1
 
         flat_grad = self._gather_flat_grad()
+        # print('flat_grad: ',flat_grad)
         opt_cond = flat_grad.abs().max() <= tolerance_grad
 
         # optimal condition
@@ -296,12 +298,12 @@ class LBFGS(Optimizer):
         old_stps = state.get('old_stps')
         ro = state.get('ro')
         H_diag = state.get('H_diag')
-        prev_flat_grad = state.get('prev_flat_grad')
-        prev_loss = state.get('prev_loss')
+        prev_flat_grad = state.get('prev_flat_grad')  #totalloss.backward()
+        prev_loss = state.get('prev_loss') #totalloss
 
         n_iter = 0
         # optimize for a max of max_iter iterations
-        while n_iter < max_iter:
+        while n_iter < max_iter:  # max_iter = 30
             # keep track of nb of iterations
             n_iter += 1
             state['n_iter'] += 1
@@ -317,12 +319,12 @@ class LBFGS(Optimizer):
                 H_diag = 1
             else:
                 # do lbfgs update (update memory)
-                y = flat_grad.sub(prev_flat_grad)
+                y = flat_grad.sub(prev_flat_grad)  # y = flat_grad - prev_flat_gard
                 s = d.mul(t)
-                ys = y.dot(s)  # y*s
+                ys = y.dot(s)  # y*s,对应位置相乘再相加
                 if ys > 1e-10:
                     # updating memory
-                    if len(old_dirs) == history_size:
+                    if len(old_dirs) == history_size:  # history_size = 100,最大长度也为100
                         # shift history by one (limited-memory)
                         old_dirs.pop(0)
                         old_stps.pop(0)
@@ -345,7 +347,7 @@ class LBFGS(Optimizer):
                 al = state['al']
 
                 # iteration in L-BFGS loop collapsed to use just one buffer
-                q = flat_grad.neg()
+                q = flat_grad.neg() # q = -1 * flat_grad
                 for i in range(num_old - 1, -1, -1):
                     al[i] = old_stps[i].dot(q) * ro[i]
                     q.add_(-al[i], old_dirs[i])
@@ -390,12 +392,16 @@ class LBFGS(Optimizer):
 
                     def obj_func(x, t, d):
                         return self._directional_evaluate(closure, x, t, d)
+                    # x_init: beta, theta, root 参数，t: 初始化的step size, d: direction, 
+                    # gtd: direction derivate, max_iter = 30
                     loss, flat_grad, t, ls_func_evals = _strong_Wolfe(obj_func, x_init, t, d,
                                                                       loss,
                                                                       flat_grad,
                                                                       gtd,
                                                                       max_iter=max_iter)
-                self._add_grad(t, d)
+                self._add_grad(t, d) # t学习率，d变化方向
+                # print('leraning rate: ',t)
+                # print('delta: ',d)
                 opt_cond = flat_grad.abs().max() <= tolerance_grad
             else:
                 # no line search, simply move with fixed-step

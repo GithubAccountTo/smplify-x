@@ -19,9 +19,14 @@ from __future__ import absolute_import
 from __future__ import print_function
 from __future__ import division
 
+# # # debug
+import ptvsd
+ptvsd.enable_attach(address=("172.17.0.5",  9024))
+ptvsd.wait_for_attach()
+
 import sys
 import os
-
+# os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 import os.path as osp
 
 import time
@@ -41,23 +46,24 @@ from prior import create_prior
 torch.backends.cudnn.enabled = False
 
 
+
 def main(**args):
-    output_folder = args.pop('output_folder')
-    output_folder = osp.expandvars(output_folder)
+    output_folder = args.pop('output_folder') # pop用于获得指定的key对应的value，并删除key-value
+    output_folder = osp.expandvars(output_folder) # 用于扩展路径
     if not osp.exists(output_folder):
         os.makedirs(output_folder)
 
     # Store the arguments for the current experiment
     conf_fn = osp.join(output_folder, 'conf.yaml')
     with open(conf_fn, 'w') as conf_file:
-        yaml.dump(args, conf_file)
+        yaml.dump(args, conf_file) # python object生成yaml文档
 
-    result_folder = args.pop('result_folder', 'results')
+    result_folder = args.pop('result_folder', 'results') # 
     result_folder = osp.join(output_folder, result_folder)
     if not osp.exists(result_folder):
         os.makedirs(result_folder)
 
-    mesh_folder = args.pop('mesh_folder', 'meshes')
+    mesh_folder = args.pop('mesh_folder', 'meshes') # 若存在，则返回args['mesh_folder'],否则返回默认值meshes
     mesh_folder = osp.join(output_folder, mesh_folder)
     if not osp.exists(mesh_folder):
         os.makedirs(mesh_folder)
@@ -70,12 +76,12 @@ def main(**args):
     if float_dtype == 'float64':
         dtype = torch.float64
     elif float_dtype == 'float32':
-        dtype = torch.float64
+        dtype = torch.float32 
     else:
         print('Unknown float type {}, exiting!'.format(float_dtype))
         sys.exit(-1)
 
-    use_cuda = args.get('use_cuda', True)
+    use_cuda = args.get('use_cuda', True) # 字典用法：返回args['use_cuda'],若不存在args['use_cuda']，返回default值
     if use_cuda and not torch.cuda.is_available():
         print('CUDA is not available, exiting!')
         sys.exit(-1)
@@ -126,7 +132,7 @@ def main(**args):
                            focal_length_y=focal_length,
                            dtype=dtype,
                            **args)
-
+    # hasattr(object, name):object中是否有name属性，有，返回true，无，返回false
     if hasattr(camera, 'rotation'):
         camera.rotation.requires_grad = False
 
@@ -170,6 +176,10 @@ def main(**args):
         prior_type=args.get('shape_prior_type', 'l2'),
         dtype=dtype, **args)
 
+    sli_prior = create_prior(
+        prior_type= 'l2',
+        dtype = dtype, **args)
+
     angle_prior = create_prior(prior_type='angle', dtype=dtype)
 
     if use_cuda and torch.cuda.is_available():
@@ -183,6 +193,7 @@ def main(**args):
         body_pose_prior = body_pose_prior.to(device=device)
         angle_prior = angle_prior.to(device=device)
         shape_prior = shape_prior.to(device=device)
+        sli_prior = sli_prior.to(device=device)
         if use_face:
             expr_prior = expr_prior.to(device=device)
             jaw_prior = jaw_prior.to(device=device)
@@ -197,9 +208,7 @@ def main(**args):
                                                        dtype=dtype)
     # Add a fake batch dimension for broadcasting
     joint_weights.unsqueeze_(dim=0)
-
     for idx, data in enumerate(dataset_obj):
-
         img = data['img']
         fn = data['fn']
         keypoints = data['keypoints']
@@ -208,17 +217,23 @@ def main(**args):
         curr_result_folder = osp.join(result_folder, fn)
         if not osp.exists(curr_result_folder):
             os.makedirs(curr_result_folder)
-        curr_mesh_folder = osp.join(mesh_folder, fn)
-        if not osp.exists(curr_mesh_folder):
-            os.makedirs(curr_mesh_folder)
+        
+        # curr_mesh_folder = osp.join(mesh_folder, fn)
+        # if not osp.exists(curr_mesh_folder):
+        #     os.makedirs(curr_mesh_folder)
+
+        curr_mesh_folder = mesh_folder
+
         for person_id in range(keypoints.shape[0]):
             if person_id >= max_persons and max_persons > 0:
                 continue
 
             curr_result_fn = osp.join(curr_result_folder,
                                       '{:03d}.pkl'.format(person_id))
-            curr_mesh_fn = osp.join(curr_mesh_folder,
-                                    '{:03d}.obj'.format(person_id))
+            # curr_mesh_fn = osp.join(curr_mesh_folder,
+            #                         '{:03d}.obj'.format(person_id))
+
+            curr_mesh_fn = osp.join(curr_mesh_folder, fn + '.obj')
 
             curr_img_folder = osp.join(output_folder, 'images', fn,
                                        '{:03d}'.format(person_id))
@@ -242,6 +257,24 @@ def main(**args):
 
             out_img_fn = osp.join(curr_img_folder, 'output.png')
 
+            args['fn'] = fn
+
+            ########### save T-pose mesh ###################
+            # body_pose = torch.zeros([1, 69],
+            #                              dtype=torch.float32,
+            #                              device=device)
+            # model_output = body_model(return_verts=True, body_pose=body_pose)
+            # vertices = model_output.vertices.detach().cpu().numpy().squeeze()
+            # import trimesh
+            # import numpy as np
+
+            # out_mesh = trimesh.Trimesh(vertices, body_model.faces, process=False)
+            # joints3D = model_output.joints
+            # print("joints3D: ", joints3D)
+            # out_mesh.export('output/000.obj')
+            ########### save T-pose mesh ###################
+             
+    
             fit_single_frame(img, keypoints[[person_id]],
                              body_model=body_model,
                              camera=camera,
@@ -253,6 +286,7 @@ def main(**args):
                              result_fn=curr_result_fn,
                              mesh_fn=curr_mesh_fn,
                              shape_prior=shape_prior,
+                             sli_prior=sli_prior,
                              expr_prior=expr_prior,
                              body_pose_prior=body_pose_prior,
                              left_hand_prior=left_hand_prior,
@@ -269,4 +303,10 @@ def main(**args):
 
 if __name__ == "__main__":
     args = parse_config()
+    args['data_folder'] = "data/EFH"
+    args['output_folder'] = "smpl_debug/EFH"
+    args['img_folder'] = 'images'
+    args['keyp_folder'] = 'keypoints'
+    
     main(**args)
+    

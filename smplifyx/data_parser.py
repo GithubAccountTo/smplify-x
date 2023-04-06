@@ -22,7 +22,7 @@ from __future__ import division
 import sys
 import os
 import os.path as osp
-
+import glob
 import json
 
 from collections import namedtuple
@@ -58,9 +58,10 @@ def read_keypoints(keypoint_fn, use_hands=True, use_face=True,
 
     gender_pd = []
     gender_gt = []
+   
+
     for idx, person_data in enumerate(data['people']):
-        body_keypoints = np.array(person_data['pose_keypoints_2d'],
-                                  dtype=np.float32)
+        body_keypoints = np.array(person_data['pose_keypoints_2d'], dtype=np.float32)
         body_keypoints = body_keypoints.reshape([-1, 3])
         if use_hands:
             left_hand_keyp = np.array(
@@ -119,6 +120,7 @@ class OpenPose(Dataset):
 
         self.use_hands = use_hands
         self.use_face = use_face
+        
         self.model_type = model_type
         self.dtype = dtype
         self.joints_to_ign = joints_to_ign
@@ -135,9 +137,11 @@ class OpenPose(Dataset):
         self.img_paths = [osp.join(self.img_folder, img_fn)
                           for img_fn in os.listdir(self.img_folder)
                           if img_fn.endswith('.png') or
-                          img_fn.endswith('.jpg') and
+                          img_fn.endswith('.jpg') or
+                          img_fn.endswith('.jpeg') and
                           not img_fn.startswith('.')]
         self.img_paths = sorted(self.img_paths)
+        
         self.cnt = 0
 
     def get_model2data(self):
@@ -169,7 +173,7 @@ class OpenPose(Dataset):
     def __len__(self):
         return len(self.img_paths)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx): # 假定实例为p,则使用p[key]取值时，自动调用该函数
         img_path = self.img_paths[idx]
         return self.read_item(img_path)
 

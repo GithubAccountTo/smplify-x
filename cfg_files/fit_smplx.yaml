@@ -51,6 +51,12 @@ body_pose_prior_weights:
     - 57.4e0
     - 4.78e0
     - 4.78e0
+# body_pose_prior_weights:
+#     - 4.04e2
+#     - 4.04e2
+#     - 57.4e0
+#     - 4.78e0
+#     - 4.78e0
 coll_loss_weights:
     - 0.0
     - 0.0

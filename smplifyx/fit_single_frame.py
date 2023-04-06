@@ -21,10 +21,12 @@ from __future__ import division
 
 
 import time
-try:
-    import cPickle as pickle
-except ImportError:
-    import pickle
+# try:
+#     import cPickle as pickle
+# except ImportError:
+#     import pickle
+import pickle
+
 
 import sys
 import os
@@ -43,8 +45,10 @@ import PIL.Image as pil_img
 from optimizers import optim_factory
 
 import fitting
-from human_body_prior.tools.model_loader import load_vposer
+# from human_body_prior.tools.model_loader import load_vposer
+# from smplifyx.human_body_prior_master.src.human_body_prior.tools.model_loader import load_model as load_vposer
 
+from human_body_prior_cvpr19.human_body_prior.tools.model_loader import load_vposer
 
 def fit_single_frame(img,
                      keypoints,
@@ -56,6 +60,7 @@ def fit_single_frame(img,
                      left_hand_prior,
                      right_hand_prior,
                      shape_prior,
+                     sli_prior,
                      expr_prior,
                      angle_prior,
                      result_fn='out.pkl',
@@ -77,6 +82,7 @@ def fit_single_frame(img,
                      depth_loss_weight=1e2,
                      interpenetration=True,
                      coll_loss_weights=None,
+                     sil_loss_weights=None,
                      df_cone_height=0.5,
                      penalize_outside=True,
                      max_collisions=8,
@@ -98,6 +104,7 @@ def fit_single_frame(img,
                      left_shoulder_idx=2,
                      right_shoulder_idx=5,
                      **kwargs):
+    # 条件为false则触发异常
     assert batch_size == 1, 'PyTorch L-BFGS only supports batch_size == 1'
 
     device = torch.device('cuda') if use_cuda else torch.device('cpu')
@@ -111,6 +118,8 @@ def fit_single_frame(img,
     if body_pose_prior_weights is None:
         body_pose_prior_weights = [4.04 * 1e2, 4.04 * 1e2, 57.4, 4.78]
 
+
+    # data_weights的尺寸与body_pose_prior_weights的尺寸一致
     msg = (
         'Number of Body pose prior weights {}'.format(
             len(body_pose_prior_weights)) +
@@ -134,7 +143,7 @@ def fit_single_frame(img,
                     len(body_pose_prior_weights)), msg
 
     if shape_weights is None:
-        shape_weights = [1e2, 5 * 1e1, 1e1, .5 * 1e1]
+        shape_weights = [1e2, 5 * 1e1, 1e1, .5 * 1e1, 0.0]
     msg = ('Number of Body pose prior weights = {} does not match the' +
            ' number of Shape prior weights = {}')
     assert (len(shape_weights) ==
@@ -155,7 +164,7 @@ def fit_single_frame(img,
                 len(body_pose_prior_weights)), msg
 
         if expr_weights is None:
-            expr_weights = [1e2, 5 * 1e1, 1e1, .5 * 1e1]
+            expr_weights = [1e2, 5 * 1e1, 1e1, .5 * 1e1, 0.0]
         msg = ('Number of Body pose prior weights = {} does not match the' +
                ' number of Expression prior weights = {}')
         assert (len(expr_weights) ==
@@ -164,7 +173,7 @@ def fit_single_frame(img,
                     len(expr_weights))
 
         if face_joints_weights is None:
-            face_joints_weights = [0.0, 0.0, 0.0, 1.0]
+            face_joints_weights = [0.0, 0.0, 0.0, 1.0, 0.0]
         msg = ('Number of Body pose prior weights does not match the' +
                ' number of face joint distance weights')
         assert (len(face_joints_weights) ==
@@ -183,9 +192,10 @@ def fit_single_frame(img,
         pose_embedding = torch.zeros([batch_size, 32],
                                      dtype=dtype, device=device,
                                      requires_grad=True)
-
+        # 扩展路径
         vposer_ckpt = osp.expandvars(vposer_ckpt)
         vposer, _ = load_vposer(vposer_ckpt, vp_model='snapshot')
+        
         vposer = vposer.to(device=device)
         vposer.eval()
 
@@ -197,13 +207,13 @@ def fit_single_frame(img,
 
     keypoint_data = torch.tensor(keypoints, dtype=dtype)
     gt_joints = keypoint_data[:, :, :2]
-    if use_joints_conf:
-        joints_conf = keypoint_data[:, :, 2].reshape(1, -1)
+    # if use_joints_conf:
+    joints_conf = keypoint_data[:, :, 2].reshape(1, -1)
 
     # Transfer the data to the correct device
     gt_joints = gt_joints.to(device=device, dtype=dtype)
-    if use_joints_conf:
-        joints_conf = joints_conf.to(device=device, dtype=dtype)
+    # if use_joints_conf:
+    joints_conf = joints_conf.to(device=device, dtype=dtype)
 
     # Create the search tree
     search_tree = None
@@ -252,6 +262,8 @@ def fit_single_frame(img,
         opt_weights_dict['hand_prior_weight'] = hand_pose_prior_weights
     if interpenetration:
         opt_weights_dict['coll_loss_weight'] = coll_loss_weights
+    # 添加silhouette loss的key
+    opt_weights_dict['sil_loss_weight'] = sil_loss_weights
 
     keys = opt_weights_dict.keys()
     opt_weights = [dict(zip(keys, vals)) for vals in
@@ -266,20 +278,22 @@ def fit_single_frame(img,
     # The indices of the joints used for the initialization of the camera
     init_joints_idxs = torch.tensor(init_joints_idxs, device=device)
 
-    edge_indices = kwargs.get('body_tri_idxs')
+    edge_indices = kwargs.get('body_tri_idxs') # edge_indices = [(5,12), (2,9)]
     init_t = fitting.guess_init(body_model, gt_joints, edge_indices,
                                 use_vposer=use_vposer, vposer=vposer,
-                                pose_embedding=pose_embedding,
+                                pose_embedding=pose_embedding, #  全0初始化
                                 model_type=kwargs.get('model_type', 'smpl'),
                                 focal_length=focal_length, dtype=dtype)
 
+    # 创建相机loss
     camera_loss = fitting.create_loss('camera_init',
                                       trans_estimation=init_t,
-                                      init_joints_idxs=init_joints_idxs,
+                                      init_joints_idxs=init_joints_idxs, # [9,12,2,5]
                                       depth_loss_weight=depth_loss_weight,
                                       dtype=dtype).to(device=device)
     camera_loss.trans_estimation[:] = init_t
 
+    # 创建人体模型参数loss
     loss = fitting.create_loss(loss_type=loss_type,
                                joint_weights=joint_weights,
                                rho=rho,
@@ -289,6 +303,7 @@ def fit_single_frame(img,
                                pose_embedding=pose_embedding,
                                body_pose_prior=body_pose_prior,
                                shape_prior=shape_prior,
+                               sli_prior=sli_prior,
                                angle_prior=angle_prior,
                                expr_prior=expr_prior,
                                left_hand_prior=left_hand_prior,
@@ -336,7 +351,7 @@ def fit_single_frame(img,
         camera_opt_params = [camera.translation, body_model.global_orient]
 
         camera_optimizer, camera_create_graph = optim_factory.create_optimizer(
-            camera_opt_params,
+            camera_opt_params, #optim_type='sgd',
             **kwargs)
 
         # The closure passed to the optimizer
@@ -397,29 +412,32 @@ def fit_single_frame(img,
             if use_vposer:
                 with torch.no_grad():
                     pose_embedding.fill_(0)
-
+            ppLoss = 0
             for opt_idx, curr_weights in enumerate(tqdm(opt_weights, desc='Stage')):
 
                 body_params = list(body_model.parameters())
 
                 final_params = list(
-                    filter(lambda x: x.requires_grad, body_params))
+                    filter(lambda x: x.requires_grad, body_params))  # 保存迭代多次的人体参数
 
                 if use_vposer:
                     final_params.append(pose_embedding)
 
                 body_optimizer, body_create_graph = optim_factory.create_optimizer(
-                    final_params,
+                    final_params, #optim_type='sgd',
                     **kwargs)
                 body_optimizer.zero_grad()
-
-                curr_weights['data_weight'] = data_weight
+                
+                curr_weights['data_weight'] =   data_weight
                 curr_weights['bending_prior_weight'] = (
-                    3.17 * curr_weights['body_pose_weight'])
+                    3.17  * curr_weights['body_pose_weight'])
                 if use_hands:
                     joint_weights[:, 25:67] = curr_weights['hand_weight']
-                if use_face:
+                if use_face: 
                     joint_weights[:, 67:] = curr_weights['face_weight']
+                
+                
+                # 添加sil_loss_weight
                 loss.reset_loss_weights(curr_weights)
 
                 closure = monitor.create_fitting_closure(
@@ -441,9 +459,10 @@ def fit_single_frame(img,
                     closure, final_params,
                     body_model,
                     pose_embedding=pose_embedding, vposer=vposer,
-                    use_vposer=use_vposer)
-
+                    use_vposer=use_vposer)    # pose_embedding有值
+                ppLoss = final_loss_val
                 if interactive:
+                    print("stage: ", opt_idx)
                     if use_cuda and torch.cuda.is_available():
                         torch.cuda.synchronize()
                     elapsed = time.time() - stage_start
@@ -474,6 +493,8 @@ def fit_single_frame(img,
             results.append({'loss': final_loss_val,
                             'result': result})
 
+
+        # print(results)
         with open(result_fn, 'wb') as result_file:
             if len(results) > 1:
                 min_idx = (0 if results[0]['loss'] < results[1]['loss']
@@ -481,11 +502,14 @@ def fit_single_frame(img,
             else:
                 min_idx = 0
             pickle.dump(results[min_idx]['result'], result_file, protocol=2)
-
-    if save_meshes or visualize:
+           
+    # visualize = True
+    if (save_meshes or visualize) and ppLoss < 20000:
+        # pose_embedding = pose_embedding * 0.0
         body_pose = vposer.decode(
             pose_embedding,
             output_type='aa').view(1, -1) if use_vposer else None
+        body_pose = body_pose
 
         model_type = kwargs.get('model_type', 'smpl')
         append_wrists = model_type == 'smpl' and use_vposer
@@ -497,15 +521,67 @@ def fit_single_frame(img,
 
         model_output = body_model(return_verts=True, body_pose=body_pose)
         vertices = model_output.vertices.detach().cpu().numpy().squeeze()
+        joints = model_output.joints.detach().cpu().numpy().squeeze()
 
         import trimesh
-
+        camera_center = camera.center.detach().cpu().numpy().squeeze()
+        camera_transl = camera.translation.detach().cpu().numpy().squeeze()
+        
+        vertices = vertices + camera_transl
         out_mesh = trimesh.Trimesh(vertices, body_model.faces, process=False)
-        rot = trimesh.transformations.rotation_matrix(
-            np.radians(180), [1, 0, 0])
-        out_mesh.apply_transform(rot)
+        # rot = trimesh.transformations.rotation_matrix(
+        #     np.radians(180), [1, 0, 0])
+        # out_mesh.apply_transform(rot)
         out_mesh.export(mesh_fn)
 
+        joints = joints + camera_transl
+        np.savez(mesh_fn[:-4]+".npz", center=camera_center,
+            transl= camera_transl, focal= focal_length, joints=joints)
+
+        # ########################### 顶点映射 ###############################
+        # import cv2
+        
+        # image = cv2.imread('/mnt/dy_data/smplify-x-master/data/images/1_1.jpg')
+        # out_image = np.zeros(image.shape, np.uint8)
+        # out_image = image.copy()
+
+        # projected_vshaped = camera(model_output.vertices)
+        # for i in range(projected_vshaped.shape[1]):
+        #     x = round(projected_vshaped[0,i,0].item())
+        #     y = round(projected_vshaped[0,i,1].item())
+        #     cv2.circle(out_image, (x,y),2,(255,255,255),-1)
+
+        # projected_joints = camera(model_output.joints)
+        # for i in range(projected_joints.shape[1]):
+        #     x = round(projected_joints[0,i,0].item())
+        #     y = round(projected_joints[0,i,1].item())
+        #     cv2.circle(out_image, (x,y),5,(0,0,255),-1)
+        # cv2.imwrite('/mnt/dy_data/smplify-x-master/output/out.jpg', out_image)  
+        # ########################### 顶点映射 ###############################
+
+        # ########################### face映射 ###############################
+        # import cv2
+        # # mask = np.zeros(img.shape[:2], np.uint8)
+        # mask = img.detach().cpu().numpy()
+        # points = camera(model_output.vertices)
+        # faces = body_model.faces
+        
+        # for i in range(faces.shape[0]):
+        #     triangle = np.zeros((3, 2), dtype= int)
+        #     j = faces[i][0]
+        #     triangle[0][:] = round(points[0,j,0].item()), round(points[0,j,1].item())
+        #     j = faces[i][1]
+        #     triangle[1][:] = round(points[0,j,0].item()), round(points[0,j,1].item())
+        #     j = faces[i][2]
+        #     triangle[2][:] = round(points[0,j,0].item()), round(points[0,j,1].item())
+        #     cv2.fillPoly(mask, [triangle], (1.0,1.0,1.0))
+        # mask = mask*255
+        # mask = mask.astype(np.uint8)
+        # cv2.imwrite('/mnt/dy_data/smplify-x-master/output/out.jpg', mask)  
+        # ########################### face映射 ###############################
+
+
+    # visualize = True
     if visualize:
         import pyrender
 

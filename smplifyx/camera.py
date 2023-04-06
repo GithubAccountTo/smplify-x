@@ -24,7 +24,7 @@ from collections import namedtuple
 import torch
 import torch.nn as nn
 
-from smplx.lbs import transform_mat
+from smplifyx.smplx_master.smplx.lbs import transform_mat
 
 
 PerspParams = namedtuple('ModelOutput',
@@ -109,9 +109,10 @@ class PerspectiveCamera(nn.Module):
 
         projected_points = torch.einsum('bki,bji->bjk',
                                         [camera_transform, points_h])
-
+        
+        div_marix = projected_points[:, :, 2].unsqueeze(dim=-1)
         img_points = torch.div(projected_points[:, :, :2],
-                               projected_points[:, :, 2].unsqueeze(dim=-1))
+                               div_marix)
         img_points = torch.einsum('bki,bji->bjk', [camera_mat, img_points]) \
             + self.center.unsqueeze(dim=1)
         return img_points

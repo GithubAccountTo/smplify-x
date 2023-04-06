@@ -34,14 +34,33 @@ def parse_config(argv=None):
                                       description=description,
                                       prog='SMPLifyX')
 
+    parser.add_argument('-c', '--config', default='cfg_files/fit_smpl.yaml',
+                        is_config_file=True,
+                        help='config file path')
     parser.add_argument('--data_folder',
                         default=os.getcwd(),
                         help='The directory that contains the data.')
+    parser.add_argument('--output_folder',
+                        default='output',
+                        type=str,
+                        help='The folder where the output is stored')
+    parser.add_argument('--model_folder',
+                        default='models',
+                        type=str,
+                        help='The directory where the models are stored.')
+    parser.add_argument('--vposer_ckpt', type=str, default='vposer_ckpt',
+                        help='The path to the V-Poser checkpoint')
+    parser.add_argument('--visualize',
+                        type=lambda arg: arg.lower() == 'true',
+                        default=False,
+                        help='Display plots while running the optimization')
+
+
+
+
+
     parser.add_argument('--max_persons', type=int, default=3,
                         help='The maximum number of persons to process')
-    parser.add_argument('-c', '--config',
-                        required=True, is_config_file=True,
-                        help='config file path')
     parser.add_argument('--loss_type', default='smplify', type=str,
                         help='The type of loss to use')
     parser.add_argument('--interactive',
@@ -52,10 +71,6 @@ def parse_config(argv=None):
                         type=lambda arg: arg.lower() == 'true',
                         default=True,
                         help='Save final output meshes')
-    parser.add_argument('--visualize',
-                        type=lambda arg: arg.lower() == 'true',
-                        default=False,
-                        help='Display plots while running the optimization')
     parser.add_argument('--degrees', type=float, default=[0, 90, 180, 270],
                         nargs='*',
                         help='Degrees of rotation for rendering the final' +
@@ -69,10 +84,6 @@ def parse_config(argv=None):
     parser.add_argument('--joints_to_ign', default=-1, type=int,
                         nargs='*',
                         help='Indices of joints to be ignored')
-    parser.add_argument('--output_folder',
-                        default='output',
-                        type=str,
-                        help='The folder where the output is stored')
     parser.add_argument('--img_folder', type=str, default='images',
                         help='The folder where the images are stored')
     parser.add_argument('--keyp_folder', type=str, default='keypoints',
@@ -113,11 +124,6 @@ def parse_config(argv=None):
     parser.add_argument('--optim_shape', default=True,
                         type=lambda x: x.lower() in ['true', '1'],
                         help='Optimize over the shape space')
-
-    parser.add_argument('--model_folder',
-                        default='models',
-                        type=str,
-                        help='The directory where the models are stored.')
     parser.add_argument('--use_joints_conf', default=True,
                         type=lambda x: x.lower() in ['true', '1'],
                         help='Use the confidence scores for the optimization')
@@ -160,8 +166,7 @@ def parse_config(argv=None):
     parser.add_argument('--use_vposer', default=False,
                         type=lambda arg: arg.lower() in ['true', '1'],
                         help='Use the VAE pose embedding')
-    parser.add_argument('--vposer_ckpt', type=str, default='',
-                        help='The path to the V-Poser checkpoint')
+    
     # Left/Right shoulder and hips
     parser.add_argument('--init_joints_idxs', nargs='*', type=int,
                         default=[9, 12, 2, 5],
@@ -193,28 +198,28 @@ def parse_config(argv=None):
                         type=lambda x: x.lower() in ['true', '1'],
                         help='Penalize outside')
     parser.add_argument('--data_weights', nargs='*',
-                        default=[1, ] * 5, type=float,
+                        default=[1, 1, 1, 1, 0.0] , type=float,
                         help='The weight of the data term')
     parser.add_argument('--body_pose_prior_weights',
-                        default=[4.04 * 1e2, 4.04 * 1e2, 57.4, 4.78],
+                        default=[4.04 * 1e2, 4.04 * 1e2, 57.4, 4.78, 0.0],
                         nargs='*',
                         type=float,
                         help='The weights of the body pose regularizer')
     parser.add_argument('--shape_weights',
-                        default=[1e2, 5 * 1e1, 1e1, .5 * 1e1],
+                        default=[1e2, 5 * 1e1, 1e1, .5 * 1e1, 0.0],
                         type=float, nargs='*',
                         help='The weights of the Shape regularizer')
     parser.add_argument('--expr_weights',
-                        default=[1e2, 5 * 1e1, 1e1, .5 * 1e1],
+                        default=[1e2, 5 * 1e1, 1e1, .5 * 1e1, 0.0],
                         type=float, nargs='*',
                         help='The weights of the Expressions regularizer')
     parser.add_argument('--face_joints_weights',
-                        default=[0.0, 0.0, 0.0, 2.0], type=float,
+                        default=[0.0, 0.0, 0.0, 2.0, 0.0], type=float,
                         nargs='*',
                         help='The weights for the facial keypoints' +
                         ' for each stage of the optimization')
     parser.add_argument('--hand_joints_weights',
-                        default=[0.0, 0.0, 0.0, 2.0],
+                        default=[0.0, 0.0, 0.0, 2.0, 0.0],
                         type=float, nargs='*',
                         help='The weights for the 2D joint error of the hands')
     parser.add_argument('--jaw_pose_prior_weights',
@@ -222,14 +227,18 @@ def parse_config(argv=None):
                         help='The weights of the pose regularizer of the' +
                         ' hands')
     parser.add_argument('--hand_pose_prior_weights',
-                        default=[1e2, 5 * 1e1, 1e1, .5 * 1e1],
+                        default=[1e2, 5 * 1e1, 1e1, .5 * 1e1, 0.0],
                         type=float, nargs='*',
                         help='The weights of the pose regularizer of the' +
                         ' hands')
     parser.add_argument('--coll_loss_weights',
-                        default=[0.0, 0.0, 0.0, 2.0], type=float,
+                        default=[0.0, 0.0, 0.0, 2.0, 0.0], type=float,
                         nargs='*',
                         help='The weight for the collision term')
+    parser.add_argument('--sil_loss_weights',
+                        default=[0.0, 0.0, 0.0, 0.0, 100.0], type=float,
+                        nargs='*',
+                        help='The weight for the silhouette term')                  
 
     parser.add_argument('--depth_loss_weight', default=1e2, type=float,
                         help='The weight for the regularizer for the' +
@@ -280,6 +289,7 @@ def parse_config(argv=None):
                         help='The maximum iterations for the optimization')
 
     args = parser.parse_args(argv)
+    
 
     args_dict = vars(args)
 
